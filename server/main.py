@@ -18,6 +18,7 @@ from typing import Literal
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+import aiosqlite
 
 # Load environment variables
 load_dotenv()
@@ -794,16 +795,24 @@ async def check_risk_alerts(
                         "details": {"total_risk_percent": round(total_risk_percent, 2), "total_risk_amount": round(total_risk, 2), "open_trades": len(open_trades)}
                     })
         
-        # Save alerts to risk_monitor table
-        for alert in alerts:
-            await conn.execute(
-                """
-                INSERT INTO risk_monitor (alert_type, risk_level, message, acknowledged)
-                VALUES (?, ?, ?, 0)
-                """,
-                (alert["alert_type"], alert["risk_level"], alert["message"])
-            )
-        await conn.commit()
+        # Save alerts to risk_monitor table (skip if database is read-only)
+        try:
+            for alert in alerts:
+                await conn.execute(
+                    """
+                    INSERT INTO risk_monitor (alert_type, risk_level, message, acknowledged)
+                    VALUES (?, ?, ?, 0)
+                    """,
+                    (alert["alert_type"], alert["risk_level"], alert["message"])
+                )
+            await conn.commit()
+        except aiosqlite.OperationalError as e:
+            # Database might be read-only in cloud deployments - that's okay
+            # We'll still return the alerts, just not save them
+            if "readonly" in str(e).lower() or "read-only" in str(e).lower():
+                pass  # Silently skip saving if database is read-only
+            else:
+                raise  # Re-raise if it's a different error
         
         # Sort alerts by risk level (CRITICAL > HIGH > MEDIUM > LOW)
         risk_order = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
