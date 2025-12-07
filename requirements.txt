@@ -1,0 +1,8 @@
+fastmcp
+streamlit
+groq
+sqlite-utils
+langchain
+pydantic
+python-dotenv
+aiosqlite
