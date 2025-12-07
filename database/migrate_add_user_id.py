@@ -78,6 +78,7 @@ async def migrate_add_user_id():
                 CREATE TABLE IF NOT EXISTS users (
                     user_id TEXT PRIMARY KEY,
                     username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
                     created_at TEXT DEFAULT (datetime('now', 'localtime'))
                 )
             """)
@@ -85,6 +86,17 @@ async def migrate_add_user_id():
         except aiosqlite.OperationalError as e:
             if "already exists" in str(e).lower():
                 print("✅ users table already exists")
+                # Check if password_hash column exists, if not add it
+                try:
+                    await conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+                    # For existing users without password, set a default (they'll need to reset)
+                    await conn.execute("UPDATE users SET password_hash = 'MIGRATION_NEEDED' WHERE password_hash IS NULL")
+                    print("✅ Added password_hash column to users table")
+                except aiosqlite.OperationalError as e2:
+                    if "duplicate column" in str(e2).lower():
+                        print("✅ password_hash column already exists")
+                    else:
+                        raise
             else:
                 raise
         

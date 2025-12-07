@@ -2,10 +2,11 @@
 -- SQLite Database for trade tracking, results, analytics, and risk monitoring
 
 -- Table 0: users
--- Stores user accounts
+-- Stores user accounts with password authentication
 CREATE TABLE IF NOT EXISTS users (
     user_id TEXT PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 

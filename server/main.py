@@ -19,12 +19,152 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import aiosqlite
+import hashlib
+import secrets
 
 # Load environment variables
 load_dotenv()
 
 # Create FastMCP server instance
 mcp = FastMCP(name="Forex Trading Assistant")
+
+
+def hash_password(password: str) -> str:
+    """Hash a password using SHA-256 with salt"""
+    salt = secrets.token_hex(16)
+    password_hash = hashlib.sha256((password + salt).encode()).hexdigest()
+    return f"{salt}:{password_hash}"
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password against a hash"""
+    try:
+        salt, stored_hash = password_hash.split(':')
+        computed_hash = hashlib.sha256((password + salt).encode()).hexdigest()
+        return computed_hash == stored_hash
+    except:
+        return False
+
+
+@mcp.tool()
+async def register_user(
+    username: str,
+    password: str
+) -> dict:
+    """
+    Register a new user account with username and password.
+    
+    Args:
+        username: Unique username for the account
+        password: Password for the account (will be hashed)
+    
+    Returns:
+        Dictionary with user_id and success message
+    """
+    if not username or not password:
+        return {
+            "error": "Username and password are required",
+            "success": False
+        }
+    
+    if len(password) < 6:
+        return {
+            "error": "Password must be at least 6 characters long",
+            "success": False
+        }
+    
+    # Generate user_id from username
+    user_id = username.lower().replace(' ', '_')
+    
+    await ensure_database()
+    async with get_db_connection() as conn:
+        # Check if username already exists
+        async with conn.execute(
+            "SELECT user_id FROM users WHERE username = ? OR user_id = ?",
+            (username, user_id)
+        ) as cursor:
+            existing = await cursor.fetchone()
+            if existing:
+                return {
+                    "error": "Username already exists. Please choose a different username.",
+                    "success": False
+                }
+        
+        # Hash password
+        password_hash = hash_password(password)
+        
+        # Insert new user
+        try:
+            await conn.execute(
+                "INSERT INTO users (user_id, username, password_hash) VALUES (?, ?, ?)",
+                (user_id, username, password_hash)
+            )
+            await conn.commit()
+            
+            return {
+                "success": True,
+                "user_id": user_id,
+                "username": username,
+                "message": f"User '{username}' registered successfully"
+            }
+        except aiosqlite.Error as e:
+            return {
+                "error": f"Failed to register user: {str(e)}",
+                "success": False
+            }
+
+
+@mcp.tool()
+async def verify_user_login(
+    username: str,
+    password: str
+) -> dict:
+    """
+    Verify user login credentials.
+    
+    Args:
+        username: Username to verify
+        password: Password to verify
+    
+    Returns:
+        Dictionary with user_id and success status if credentials are valid
+    """
+    if not username or not password:
+        return {
+            "error": "Username and password are required",
+            "success": False
+        }
+    
+    await ensure_database()
+    async with get_db_connection() as conn:
+        # Find user by username
+        async with conn.execute(
+            "SELECT user_id, username, password_hash FROM users WHERE username = ?",
+            (username,)
+        ) as cursor:
+            user = await cursor.fetchone()
+            
+            if not user:
+                return {
+                    "error": "Invalid username or password",
+                    "success": False
+                }
+            
+            user_id, db_username, password_hash = user
+            
+            # Verify password
+            if verify_password(password, password_hash):
+                return {
+                    "success": True,
+                    "user_id": user_id,
+                    "username": db_username,
+                    "message": "Login successful"
+                }
+            else:
+                return {
+                    "error": "Invalid username or password",
+                    "success": False
+                }
 
 
 @mcp.tool()

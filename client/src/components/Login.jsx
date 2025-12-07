@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { verifyUserLogin, registerUser } from '../services/mcpClient'
 import './Login.css'
 
 function Login({ onLogin }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [isRegistering, setIsRegistering] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -13,21 +15,41 @@ function Login({ onLogin }) {
     setLoading(true)
 
     try {
-      // Simple authentication - in production, use proper backend authentication
-      // For now, we'll use username as user_id
       if (!username.trim()) {
         setError('Username is required')
         setLoading(false)
         return
       }
 
-      // Generate a simple user ID from username (in production, use proper auth)
-      const userId = username.toLowerCase().replace(/\s+/g, '_')
-      
-      // Call onLogin with user info
-      onLogin({ userId, username })
+      if (!password.trim()) {
+        setError('Password is required')
+        setLoading(false)
+        return
+      }
+
+      if (password.length < 6) {
+        setError('Password must be at least 6 characters long')
+        setLoading(false)
+        return
+      }
+
+      let result
+      if (isRegistering) {
+        // Register new user
+        result = await registerUser(username, password)
+      } else {
+        // Login existing user
+        result = await verifyUserLogin(username, password)
+      }
+
+      if (result.success) {
+        // Call onLogin with user info
+        onLogin({ userId: result.user_id, username: result.username })
+      } else {
+        setError(result.error || 'Authentication failed')
+      }
     } catch (err) {
-      setError(err.message || 'Login failed')
+      setError(err.message || 'Authentication failed')
     } finally {
       setLoading(false)
     }
@@ -36,8 +58,8 @@ function Login({ onLogin }) {
   return (
     <div className="login-container">
       <div className="login-box">
-        <h2>🔐 Login to Forex Trading Assistant</h2>
-        <p>Enter your username to access your trading data</p>
+        <h2>🔐 {isRegistering ? 'Register' : 'Login'} to Forex Trading Assistant</h2>
+        <p>{isRegistering ? 'Create a new account' : 'Enter your credentials to access your trading data'}</p>
         
         <form onSubmit={handleSubmit} className="login-form">
           <div className="form-group">
@@ -53,17 +75,49 @@ function Login({ onLogin }) {
             />
           </div>
 
+          <div className="form-group">
+            <label htmlFor="password">Password</label>
+            <input
+              type="password"
+              id="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
+              required
+              disabled={loading}
+              minLength={6}
+            />
+          </div>
+
           {error && (
             <div className="error-message">{error}</div>
           )}
 
           <button type="submit" disabled={loading} className="login-btn">
-            {loading ? 'Logging in...' : 'Login'}
+            {loading ? (isRegistering ? 'Registering...' : 'Logging in...') : (isRegistering ? 'Register' : 'Login')}
           </button>
         </form>
 
+        <div className="login-switch">
+          <p>
+            {isRegistering ? 'Already have an account? ' : "Don't have an account? "}
+            <button
+              type="button"
+              onClick={() => {
+                setIsRegistering(!isRegistering)
+                setError('')
+                setPassword('')
+              }}
+              className="switch-btn"
+              disabled={loading}
+            >
+              {isRegistering ? 'Login' : 'Register'}
+            </button>
+          </p>
+        </div>
+
         <p className="login-note">
-          💡 Your username is your unique identifier. Use the same username to access your data.
+          💡 {isRegistering ? 'Choose a strong password (at least 6 characters).' : 'Your data is secure and encrypted.'}
         </p>
       </div>
     </div>

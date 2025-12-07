@@ -164,12 +164,36 @@ export async function checkRiskAlerts(options = {}, userId) {
   return result;
 }
 
+/**
+ * Register a new user
+ */
+export async function registerUser(username, password) {
+  const result = await callTool('register_user', {
+    username,
+    password
+  });
+  return result;
+}
+
+/**
+ * Verify user login credentials
+ */
+export async function verifyUserLogin(username, password) {
+  const result = await callTool('verify_user_login', {
+    username,
+    password
+  });
+  return result;
+}
+
 export default {
   listTools,
   callTool,
   saveTrade,
   logTradeResult,
   getTradeInsights,
-  checkRiskAlerts
+  checkRiskAlerts,
+  registerUser,
+  verifyUserLogin
 };
 
