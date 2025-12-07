@@ -6,12 +6,37 @@ Uses aiosqlite for async compatibility with FastMCP and Streamlit
 
 import aiosqlite
 import asyncio
+import os
 from pathlib import Path
 
 # Get the directory where this script is located
 DB_DIR = Path(__file__).parent
-DB_PATH = DB_DIR / "forex_trading.db"
 SCHEMA_PATH = DB_DIR / "schema.sql"
+
+# Get database path from environment variable, or use fallback
+# FastMCP Cloud: Use /tmp directory (writable) or environment variable
+DATABASE_PATH_ENV = os.getenv("DATABASE_PATH")
+
+if DATABASE_PATH_ENV:
+    # Use environment variable if set
+    DB_PATH = Path(DATABASE_PATH_ENV)
+else:
+    # Try writable locations in order:
+    # 1. /tmp (usually writable on cloud platforms)
+    # 2. Current directory (fallback)
+    tmp_path = Path("/tmp/forex_trading.db")
+    local_path = DB_DIR / "forex_trading.db"
+    
+    # Prefer /tmp if it exists and is writable, otherwise use local
+    try:
+        # Test if /tmp is writable
+        test_file = Path("/tmp/.test_write")
+        test_file.touch()
+        test_file.unlink()
+        DB_PATH = tmp_path
+    except (PermissionError, OSError):
+        # /tmp not writable, use local directory
+        DB_PATH = local_path
 
 
 async def init_database():
