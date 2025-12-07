@@ -25,3 +25,8 @@ Thumbs.db
 # Build output
 dist/
 build/
+
+# React/Vite
+client/node_modules/
+client/dist/
+client/.env

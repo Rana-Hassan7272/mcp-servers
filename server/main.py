@@ -29,6 +29,7 @@ mcp = FastMCP(name="Forex Trading Assistant")
 
 @mcp.tool()
 async def save_trade(
+    user_id: str,
     entry_price: float,
     take_profit: float | None,
     stop_loss: float | None,
@@ -91,13 +92,19 @@ async def save_trade(
                 ratio = profit_distance / risk_distance
                 risk_reward_ratio = f"1:{ratio:.2f}"
         
+        # Ensure user exists
+        await conn.execute(
+            "INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)",
+            (user_id, user_id)
+        )
+        
         cursor = await conn.execute(
             """
             INSERT INTO trade_tracker 
-            (entry_price, take_profit, stop_loss, lot_size, balance, trade_type, currency_pair, timeframe, trade_style, strategy, risk_reward_ratio, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (user_id, entry_price, take_profit, stop_loss, lot_size, balance, trade_type, currency_pair, timeframe, trade_style, strategy, risk_reward_ratio, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (entry_price, take_profit, stop_loss, lot_size, balance, trade_type, currency_pair, timeframe, trade_style, strategy, risk_reward_ratio, notes)
+            (user_id, entry_price, take_profit, stop_loss, lot_size, balance, trade_type, currency_pair, timeframe, trade_style, strategy, risk_reward_ratio, notes)
         )
         await conn.commit()
         trade_id = cursor.lastrowid
@@ -135,6 +142,7 @@ async def save_trade(
 
 @mcp.tool()
 async def log_trade_result(
+    user_id: str,
     trade_id: int,
     result: Literal["WIN", "LOSS"],
     notes: str | None = None
@@ -160,13 +168,13 @@ async def log_trade_result(
     """
     await ensure_database()
     async with get_db_connection() as conn:
-        # Get full trade details including balance
+        # Get full trade details including balance (verify user_id matches)
         async with conn.execute(
             """
             SELECT id, entry_price, take_profit, stop_loss, lot_size, balance, status, trade_type
-            FROM trade_tracker WHERE id = ?
+            FROM trade_tracker WHERE id = ? AND user_id = ?
             """,
-            (trade_id,)
+            (trade_id, user_id)
         ) as cursor:
             trade = await cursor.fetchone()
             if not trade:
@@ -220,10 +228,10 @@ async def log_trade_result(
         # Insert into trade_results table
         result_cursor = await conn.execute(
             """
-            INSERT INTO trade_results (trade_id, result, profit_loss, notes)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO trade_results (user_id, trade_id, result, profit_loss, notes)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (trade_id, result, profit_loss, notes)
+            (user_id, trade_id, result, profit_loss, notes)
         )
         await conn.commit()
         result_id = result_cursor.lastrowid
@@ -256,9 +264,11 @@ async def log_trade_result(
 
 @mcp.tool()
 async def get_trade_insights(
+    user_id: str,
     currency_pair: str | None = None,
     timeframe: str | None = None,
-    strategy: str | None = None
+    strategy: str | None = None,
+    date_filter: str | None = None
 ) -> dict:
     """
     Get comprehensive analytics and insights from all saved trades.
@@ -326,9 +336,9 @@ async def get_trade_insights(
                 AVG(CASE WHEN tr.result = 'LOSS' THEN tr.profit_loss ELSE NULL END) as avg_loss
             FROM trade_tracker tt
             INNER JOIN trade_results tr ON tt.id = tr.trade_id
-            WHERE tt.status = 'CLOSED' {'AND ' + ' AND '.join(filters) if filters else ''}
+            WHERE tt.status = 'CLOSED' AND tt.user_id = ? {'AND ' + ' AND '.join([f for f in filters if f != 'user_id = ?']) if filters else ''}
             """,
-            params
+            [user_id] + [p for p in params if p != user_id]
         ) as cursor:
             perf = await cursor.fetchone()
             if perf and perf[0]:
@@ -375,9 +385,9 @@ async def get_trade_insights(
                 AVG(CASE WHEN tr.result = 'LOSS' THEN tt.lot_size ELSE NULL END) as avg_lot_loss
             FROM trade_tracker tt
             INNER JOIN trade_results tr ON tt.id = tr.trade_id
-            WHERE tt.status = 'CLOSED' {'AND ' + ' AND '.join(filters) if filters else ''}
+            WHERE tt.status = 'CLOSED' AND tt.user_id = ? {'AND ' + ' AND '.join([f for f in filters if f != 'user_id = ?']) if filters else ''}
             """,
-            params
+            [user_id] + [p for p in params if p != user_id]
         ) as cursor:
             lot_impact = await cursor.fetchone()
             avg_lot_win = lot_impact[0] if lot_impact and lot_impact[0] else 0
@@ -542,6 +552,7 @@ async def get_trade_insights(
 
 @mcp.tool()
 async def check_risk_alerts(
+    user_id: str,
     recent_trades_count: int = 10,
     consecutive_loss_threshold: int = 3,
     max_trades_per_hour: int = 5,
@@ -566,7 +577,7 @@ async def check_risk_alerts(
     async with get_db_connection() as conn:
         alerts = []
         
-        # Get recent closed trades with results
+        # Get recent closed trades with results (filtered by user_id)
         async with conn.execute(
             """
             SELECT 
@@ -575,21 +586,21 @@ async def check_risk_alerts(
                 tr.result, tr.profit_loss, tr.timestamp as result_timestamp
             FROM trade_tracker tt
             LEFT JOIN trade_results tr ON tt.id = tr.trade_id
-            WHERE tt.status = 'CLOSED'
+            WHERE tt.status = 'CLOSED' AND tt.user_id = ?
             ORDER BY tt.timestamp DESC
             LIMIT ?
             """,
-            (recent_trades_count * 2,)  # Get more to analyze patterns
+            (user_id, recent_trades_count * 2)  # Get more to analyze patterns
         ) as cursor:
             recent_trades = await cursor.fetchall()
         
-        # Get all open trades
+        # Get all open trades (filtered by user_id)
         async with conn.execute(
             """
             SELECT id, entry_price, take_profit, stop_loss, lot_size, balance, 
                    trade_type, timestamp, risk_reward_ratio
             FROM trade_tracker
-            WHERE status = 'OPEN'
+            WHERE status = 'OPEN' AND user_id = ?
             ORDER BY timestamp DESC
             """
         ) as cursor:
@@ -800,10 +811,10 @@ async def check_risk_alerts(
             for alert in alerts:
                 await conn.execute(
                     """
-                    INSERT INTO risk_monitor (alert_type, risk_level, message, acknowledged)
-                    VALUES (?, ?, ?, 0)
+                    INSERT INTO risk_monitor (user_id, alert_type, risk_level, message, acknowledged)
+                    VALUES (?, ?, ?, ?, 0)
                     """,
-                    (alert["alert_type"], alert["risk_level"], alert["message"])
+                    (user_id, alert["alert_type"], alert["risk_level"], alert["message"])
                 )
             await conn.commit()
         except aiosqlite.OperationalError as e:
