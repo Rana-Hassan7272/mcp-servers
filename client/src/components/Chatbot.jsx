@@ -29,7 +29,16 @@ function Chatbot({ userId }) {
     ]
   }
 
-  const [messages, setMessages] = useState(loadChatHistory)
+  // Initialize with greeting if no history exists
+  const initialMessages = loadChatHistory()
+  const hasHistory = initialMessages.length > 1 || (initialMessages.length === 1 && initialMessages[0].content.length > 200)
+  
+  const [messages, setMessages] = useState(hasHistory ? initialMessages : [
+    {
+      role: 'assistant',
+      content: 'Hello! I\'m your Forex Trading Assistant. I help you track your trades, analyze performance, and manage risk. How can I assist you today?'
+    }
+  ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const messagesEndRef = useRef(null)

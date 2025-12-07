@@ -325,6 +325,12 @@ async def log_trade_result(
             
             trade_id_db, entry_price, take_profit, stop_loss, lot_size, balance, status, trade_type = trade
             
+            # Ensure lot_size is a float (handle potential string conversion issues)
+            lot_size = float(lot_size) if lot_size is not None else 0.0
+            
+            # Debug: Log the values being used for calculation
+            print(f"DEBUG: Trade #{trade_id} - Entry: {entry_price}, SL: {stop_loss}, TP: {take_profit}, Lot Size: {lot_size}, Type: {trade_type}")
+            
             if status == "CLOSED":
                 return {
                     "warning": f"Trade #{trade_id} is already closed",
@@ -333,6 +339,9 @@ async def log_trade_result(
                 }
         
         # Calculate profit/loss based on result
+        # Formula for XAU/USD: P/L = (Price Move) × (Lot Size × 100)
+        # 0.01 lot = $1 per $1 move, 0.1 lot = $10 per $1 move, etc.
+        # Example: Entry 2000, SL 1998, Lot 0.01 → Loss = (2000-1998) × (0.01×100) = 2 × 1 = $2
         profit_loss = None
         exit_price = None
         
@@ -343,7 +352,10 @@ async def log_trade_result(
                     price_move = take_profit - entry_price
                 else:  # SELL
                     price_move = entry_price - take_profit
+                # Ensure price_move is positive for WIN
+                price_move = abs(price_move)
                 profit_loss = price_move * (lot_size * 100)
+                print(f"DEBUG WIN: price_move={price_move}, lot_size={lot_size}, multiplier={lot_size * 100}, profit_loss={profit_loss}")
             else:
                 return {
                     "error": f"Trade #{trade_id} has no take_profit set. Cannot calculate WIN profit automatically.",
@@ -357,7 +369,10 @@ async def log_trade_result(
                     price_move = entry_price - stop_loss
                 else:  # SELL
                     price_move = stop_loss - entry_price
-                profit_loss = -abs(price_move * (lot_size * 100))  # Negative for loss
+                # Ensure price_move is positive, then make negative for loss
+                price_move = abs(price_move)
+                profit_loss = -(price_move * (lot_size * 100))  # Negative for loss
+                print(f"DEBUG LOSS: price_move={price_move}, lot_size={lot_size}, multiplier={lot_size * 100}, profit_loss={profit_loss}")
             else:
                 return {
                     "error": f"Trade #{trade_id} has no stop_loss set. Cannot calculate LOSS automatically.",

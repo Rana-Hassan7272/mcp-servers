@@ -27,7 +27,7 @@ const TOOLS_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'save_trade',
-      description: 'Save a new trade entry. REQUIRED fields: entry_price, lot_size, balance, trade_type (BUY or SELL). Optional: take_profit, stop_loss, currency_pair (default XAU/USD), timeframe, trade_style, strategy, notes.',
+      description: 'Save a new trade entry. REQUIRED fields: entry_price, lot_size, balance, trade_type (BUY or SELL). IMPORTANT fields: take_profit, stop_loss. ALSO NEEDED fields: timeframe, trade_style (swing, day trade, scalp), strategy. Optional: currency_pair (default XAU/USD), notes. DO NOT call this tool if timeframe, trade_style, or strategy are missing - ask for them first.',
       parameters: {
         type: 'object',
         properties: {
@@ -109,37 +109,63 @@ export async function processUserMessage(userMessage, conversationHistory = [], 
   const messages = [
     {
       role: 'system',
-      content: `You are a helpful Forex Trading Assistant. You ONLY help with trading-related tasks:
-1. Saving trades when users provide trade details
-2. Logging trade results (WIN/LOSS) when users tell you about outcomes
-3. Providing insights when users ask about trading performance
-4. Checking risk alerts when users want to monitor trading patterns
+      content: `You are a friendly and helpful Forex Trading Assistant. Your personality is conversational, professional, and supportive.
 
-IMPORTANT: If the user asks something NOT related to trading (like their name, weather, etc.), politely redirect them: "I'm your Forex Trading Assistant. I can help you save trades, log results, get insights, or check risk alerts. How can I help with your trading today?"
+CRITICAL RULE: NEVER use the word "(optional)" when asking for trade details. All fields should be presented equally without labels.
 
-IMPORTANT RULES FOR EXTRACTING TRADE DATA:
-- When user says "entry price was 3000" → extract entry_price: 3000
-- When user says "lot size 0.01" → extract lot_size: 0.01
-- When user says "current balance 400" → extract balance: 400
-- When user says "trade type sell" or "SELL" → extract trade_type: "SELL" (must be uppercase "BUY" or "SELL")
-- When user says "take profit 3010" or "TP 3010" → extract take_profit: 3010
-- When user says "stop loss 2990" or "SL 2990" → extract stop_loss: 2990
-- When user says "i won trade 1" or "trade 1 was a win" → extract trade_id: 1, result: "WIN"
+CONVERSATION FLOW:
 
-REQUIRED FIELDS for save_trade:
-- entry_price (number): The entry price
-- lot_size (number): Lot size (any positive number)
-- balance (number): Current account balance
-- trade_type (string): Must be "BUY" or "SELL" (uppercase)
+1. GREETING: When user says "hi", "hello", or starts chatting, introduce yourself:
+   "Hello! I'm your Forex Trading Assistant. I help you track your trades, analyze performance, and manage risk. How can I assist you today?"
 
-OPTIONAL FIELDS:
-- take_profit, stop_loss, currency_pair, timeframe, trade_style, strategy, notes
+2. SAVING A NEW TRADE:
+   - When user says "i take new trade", "save trade", "new trade", or similar → Guide them through saving a trade
+   - Ask for details systematically (NEVER mention "optional" for any field):
+     "Great! Let's save your new trade. I'll need a few details:
+     • Entry price?
+     • Lot size?
+     • Current balance?
+     • Trade type (BUY or SELL)?
+     • Take profit?
+     • Stop loss?
+     • Timeframe?
+     • Trade style (swing, day trade, or scalp)?
+     • Strategy?"
+   - REQUIRED fields: entry_price, lot_size, balance, trade_type
+   - IMPORTANT fields (should be provided): take_profit, stop_loss
+   - ALSO NEEDED fields: timeframe, trade_style, strategy
+   - If user provides some details but misses REQUIRED ones, ask for ONLY the missing required fields one by one
+   - If user provides all REQUIRED fields but misses IMPORTANT ones (take_profit, stop_loss), ask: "I need your take profit and stop loss prices to complete the trade setup."
+   - If user provides all REQUIRED and IMPORTANT fields but misses ALSO NEEDED ones (trade_style, strategy, timeframe), ask: "I have all the essential details. Please provide your trade style (swing, day trade, or scalp), strategy, and timeframe to complete the trade information."
+   - CRITICAL: DO NOT call save_trade tool if trade_style, strategy, or timeframe are missing. Ask for them first.
+   - Only call save_trade tool when you have collected ALL details including trade_style, strategy, and timeframe
+   - After saving successfully, ALWAYS ask: "Trade saved! Was this trade a WIN or LOSS?"
 
-CRITICAL: If user provides incomplete REQUIRED data, DO NOT call the tool. Instead, ask them nicely in a friendly way like "I need one more detail to save your trade: Please provide the [missing field name]." Never show technical validation errors to the user.
+3. LOGGING TRADE RESULT:
+   - When user says "win", "loss", "it was a win", "it was a loss", or answers your question about trade outcome
+   - Extract trade_id from context (the most recently saved trade)
+   - Call log_trade_result tool
+   - Show the result naturally: "Trade logged as [WIN/LOSS]. Profit/Loss: $X. New balance: $Y"
 
-For get_trade_insights: If user asks for specific information (e.g., "only timeframe", "just tell me timeframe", "which timeframe suits me"), call the tool but the system will filter the response to show only that information.
+4. GETTING INSIGHTS:
+   - When user asks "insights", "show me insights", "how am I doing", "my performance", "statistics", "analytics"
+   - Call get_trade_insights tool
+   - Display the results in a natural, conversational way with explanations
 
-After calling a tool, summarize the result in natural language.`
+5. RISK ALERTS & SUGGESTIONS:
+   - When user asks "suggestions", "future plan", "what should I do", "advice", "recommendations", "alerts"
+   - Call check_risk_alerts tool
+   - Display alerts in a natural way with actionable advice
+
+6. NON-TRADING QUERIES:
+   - Politely redirect: "I'm your Forex Trading Assistant focused on trading. I can help you save trades, log results, get insights, or check risk alerts. How can I help with your trading today?"
+
+IMPORTANT RULES:
+- Be conversational and friendly, not robotic
+- Ask for one thing at a time when collecting trade details
+- After saving a trade, ALWAYS ask about the outcome (WIN/LOSS)
+- Display tool results in natural language, not raw data
+- Remember context - if user just saved trade #5, and says "it was a loss", they mean trade #5`
     },
     ...conversationHistory,
     {
@@ -162,7 +188,17 @@ After calling a tool, summarize the result in natural language.`
       });
     } catch (groqError) {
       // Handle Groq API errors, especially function calling errors
-      if (groqError.error && groqError.error.code === 'tool_use_failed') {
+      const errorCode = groqError?.error?.code || groqError?.code;
+      const errorMessage = groqError?.error?.message || groqError?.message || '';
+      
+      // Handle rate limiting
+      if (errorCode === 'rate_limit_exceeded' || errorMessage.includes('Rate limit') || errorMessage.includes('rate_limit')) {
+        const waitTime = errorMessage.match(/try again in ([\d.]+)s/)?.[1] || '10';
+        return `⏳ Rate limit reached. Please wait ${waitTime} seconds and try again.\n\n💡 You can also:\n- Use the "Save Trade" form instead of chat\n- Upgrade your Groq plan for higher limits\n- Try again in a few moments`;
+      }
+      
+      // Handle function calling errors
+      if (errorCode === 'tool_use_failed' || errorMessage.includes('Failed to call a function')) {
         // If function calling failed, try to understand user intent without tools
         const userIntent = userMessage.toLowerCase();
         
@@ -172,26 +208,33 @@ After calling a tool, summarize the result in natural language.`
             userIntent.includes('trade') || userIntent.includes('save') ||
             userIntent.includes('log') || userIntent.includes('risk')) {
           // Retry without function calling, let LLM respond naturally
-          const fallbackResponse = await groq.chat.completions.create({
-            model: 'llama-3.1-8b-instant',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are a helpful Forex Trading Assistant. If the user asks about trades, insights, or wants to save/log trades, acknowledge their request but explain that you need to use specific tools. For non-trading questions, respond naturally.'
-              },
-              ...conversationHistory,
-              { role: 'user', content: userMessage }
-            ],
-            temperature: 0.7,
-            max_tokens: 512
-          });
-          return fallbackResponse.choices[0].message.content;
+          try {
+            const fallbackResponse = await groq.chat.completions.create({
+              model: 'llama-3.1-8b-instant',
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are a helpful Forex Trading Assistant. If the user asks about trades, insights, or wants to save/log trades, acknowledge their request but explain that you need to use specific tools. For non-trading questions, respond naturally.'
+                },
+                ...conversationHistory,
+                { role: 'user', content: userMessage }
+              ],
+              temperature: 0.7,
+              max_tokens: 512
+            });
+            return fallbackResponse.choices[0].message.content;
+          } catch (fallbackError) {
+            return `I understand you want to ${userIntent.includes('save') ? 'save a trade' : userIntent.includes('log') ? 'log a trade result' : 'get insights'}. Please use the form buttons at the top, or try rephrasing your request with all details.`;
+          }
         } else {
           // Non-trading query, respond naturally
           return "I'm your Forex Trading Assistant focused on trading. I can help you save trades, log results, get insights, and check risk alerts. How can I help with your trading today?";
         }
       }
-      throw groqError;
+      
+      // Generic error handling
+      console.error('Groq API error:', groqError);
+      throw new Error(errorMessage || 'Failed to process message. Please try again.');
     }
 
     const message = response.choices[0].message;
@@ -223,14 +266,47 @@ After calling a tool, summarize the result in natural language.`
         switch (toolName) {
           case 'save_trade':
             // Validate required fields before calling
-            const missingFields = [];
-            if (!toolArgs.entry_price && toolArgs.entry_price !== 0) missingFields.push('entry_price');
-            if (!toolArgs.lot_size && toolArgs.lot_size !== 0) missingFields.push('lot_size');
-            if (!toolArgs.balance && toolArgs.balance !== 0) missingFields.push('balance');
-            if (!toolArgs.trade_type) missingFields.push('trade_type');
+            const missingRequired = [];
+            const missingImportant = [];
+            
+            if (!toolArgs.entry_price && toolArgs.entry_price !== 0) missingRequired.push('entry price');
+            if (!toolArgs.lot_size && toolArgs.lot_size !== 0) missingRequired.push('lot size');
+            if (!toolArgs.balance && toolArgs.balance !== 0) missingRequired.push('balance');
+            if (!toolArgs.trade_type) missingRequired.push('trade type (BUY or SELL)');
+            
+            // Check important fields (take_profit, stop_loss) - should be provided
+            if (!toolArgs.take_profit && toolArgs.take_profit !== 0) missingImportant.push('take profit');
+            if (!toolArgs.stop_loss && toolArgs.stop_loss !== 0) missingImportant.push('stop loss');
 
-            if (missingFields.length > 0) {
-              return `I need a few more details to save your trade:\n${missingFields.map(f => `- ${f.replace(/_/g, ' ')}`).join('\n')}\n\nPlease provide these missing required fields.`;
+            // If missing required fields, ask for them
+            if (missingRequired.length > 0) {
+              if (missingRequired.length === 1) {
+                return `I need one more detail to save your trade:\n\nPlease provide the ${missingRequired[0]}.`;
+              } else {
+                return `I need a few more details to save your trade:\n\n${missingRequired.map(f => `• ${f}`).join('\n')}\n\nPlease provide these details.`;
+              }
+            }
+            
+            // If missing important fields, ask for them
+            if (missingImportant.length > 0) {
+              return `I need your ${missingImportant.join(' and ')} ${missingImportant.length > 1 ? 'prices' : 'price'} to complete the trade setup.`;
+            }
+            
+            // If missing optional fields (trade_style, strategy, timeframe), ask once before saving
+            const missingOptional = [];
+            // Check for empty strings, null, undefined, or whitespace-only strings
+            if (!toolArgs.trade_style || (typeof toolArgs.trade_style === 'string' && toolArgs.trade_style.trim() === '')) {
+              missingOptional.push('trade style (swing, day trade, or scalp)');
+            }
+            if (!toolArgs.strategy || (typeof toolArgs.strategy === 'string' && toolArgs.strategy.trim() === '')) {
+              missingOptional.push('strategy');
+            }
+            if (!toolArgs.timeframe || (typeof toolArgs.timeframe === 'string' && toolArgs.timeframe.trim() === '')) {
+              missingOptional.push('timeframe');
+            }
+            
+            if (missingOptional.length > 0) {
+              return `I have all the essential details. Please provide your ${missingOptional.join(', ')} to complete the trade information.`;
             }
 
             // Ensure trade_type is uppercase
@@ -238,8 +314,19 @@ After calling a tool, summarize the result in natural language.`
               toolArgs.trade_type = toolArgs.trade_type.toUpperCase();
             }
 
-            console.log('Calling saveTrade with:', toolArgs); // Debug
-            toolResult = await saveTrade(toolArgs);
+            // Automatically inject user_id - LLM doesn't need to provide it
+            if (!userId) {
+              return `❌ Error: User session not found. Please log in again.`;
+            }
+            
+            // Add user_id to toolArgs (LLM doesn't know about this requirement)
+            const tradeDataWithUserId = {
+              ...toolArgs,
+              user_id: userId
+            };
+            
+            console.log('Calling saveTrade with:', tradeDataWithUserId); // Debug
+            toolResult = await saveTrade(tradeDataWithUserId, userId);
             console.log('saveTrade result:', toolResult); // Debug
 
             if (!toolResult) {
@@ -293,11 +380,16 @@ After calling a tool, summarize the result in natural language.`
             const riskReward = resultData.risk_reward_ratio || resultData.riskRewardRatio || toolResult.risk_reward_ratio || toolResult.riskRewardRatio;
             const status = resultData.status || toolResult.status;
 
-            return `✅ Trade #${tradeId} saved successfully!\n` +
-                   `Entry: ${entryPrice}, TP: ${takeProfit || 'Not set'}, SL: ${stopLoss || 'Not set'}\n` +
-                   `Lot Size: ${lotSize}, Type: ${tradeType}\n` +
+            // After saving trade, ask about outcome
+            return `✅ Trade #${tradeId} saved successfully!\n\n` +
+                   `📊 Trade Details:\n` +
+                   `Entry: ${entryPrice}\n` +
+                   `Take Profit: ${takeProfit || 'Not set'}\n` +
+                   `Stop Loss: ${stopLoss || 'Not set'}\n` +
+                   `Lot Size: ${lotSize}\n` +
+                   `Type: ${tradeType}\n` +
                    (riskReward ? `Risk:Reward: ${riskReward}\n` : '') +
-                   `Status: ${status}`;
+                   `\n💬 Was this trade a WIN or LOSS?`;
 
           case 'log_trade_result':
             if (!toolArgs.trade_id || !toolArgs.result) {
@@ -307,6 +399,7 @@ After calling a tool, summarize the result in natural language.`
               return `❌ Error: User session not found. Please log in again.`;
             }
             
+            // user_id is automatically passed to logTradeResult function
             toolResult = await logTradeResult(toolArgs.trade_id, toolArgs.result, toolArgs.notes, userId);
             if (toolResult.error) {
               return `❌ Error: ${toolResult.error}`;
@@ -414,17 +507,52 @@ After calling a tool, summarize the result in natural language.`
               return `❌ Error: ${toolResult.error}`;
             }
             if (!toolResult.alerts || toolResult.alerts.length === 0) {
-              return '✅ No risk alerts detected. Your trading looks good!';
+              return `✅ Great news! No risk alerts detected. Your trading patterns look healthy. Keep up the good work! 💪`;
             }
-            let alertMessage = `🚨 Risk Alerts (${toolResult.total_alerts} total):\n\n`;
-            toolResult.alerts.slice(0, 5).forEach((alert, idx) => {
-              alertMessage += `${idx + 1}. [${alert.risk_level}] ${alert.alert_type.replace(/_/g, ' ')}\n`;
-              alertMessage += `   ${alert.message}\n`;
-              if (alert.recommendation) {
-                alertMessage += `   💡 ${alert.recommendation}\n`;
-              }
-              alertMessage += '\n';
-            });
+            
+            let alertMessage = `🚨 I've analyzed your trading patterns and found ${toolResult.total_alerts} risk alert${toolResult.total_alerts > 1 ? 's' : ''}:\n\n`;
+            
+            // Group by risk level
+            const critical = toolResult.alerts.filter(a => a.risk_level === 'CRITICAL');
+            const high = toolResult.alerts.filter(a => a.risk_level === 'HIGH');
+            const medium = toolResult.alerts.filter(a => a.risk_level === 'MEDIUM');
+            const low = toolResult.alerts.filter(a => a.risk_level === 'LOW');
+            
+            if (critical.length > 0) {
+              alertMessage += `🔴 **CRITICAL ALERTS:**\n`;
+              critical.forEach((alert, idx) => {
+                alertMessage += `${idx + 1}. ${alert.message}\n`;
+                if (alert.recommendation) {
+                  alertMessage += `   💡 Recommendation: ${alert.recommendation}\n`;
+                }
+                alertMessage += '\n';
+              });
+            }
+            
+            if (high.length > 0) {
+              alertMessage += `🟠 **HIGH PRIORITY:**\n`;
+              high.slice(0, 3).forEach((alert, idx) => {
+                alertMessage += `${idx + 1}. ${alert.message}\n`;
+                if (alert.recommendation) {
+                  alertMessage += `   💡 ${alert.recommendation}\n`;
+                }
+                alertMessage += '\n';
+              });
+            }
+            
+            if (medium.length > 0 && (critical.length + high.length) < 3) {
+              alertMessage += `🟡 **MEDIUM PRIORITY:**\n`;
+              medium.slice(0, 2).forEach((alert, idx) => {
+                alertMessage += `${idx + 1}. ${alert.message}\n`;
+                if (alert.recommendation) {
+                  alertMessage += `   💡 ${alert.recommendation}\n`;
+                }
+                alertMessage += '\n';
+              });
+            }
+            
+            alertMessage += `\n💬 Would you like me to help you address any of these alerts?`;
+            
             return alertMessage;
 
           default:
