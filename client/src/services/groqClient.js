@@ -38,7 +38,7 @@ const TOOLS_DEFINITIONS = [
           balance: { type: 'number', description: 'Current account balance (required)' },
           trade_type: { type: 'string', enum: ['BUY', 'SELL'], description: 'Trade type - BUY or SELL (required)' },
           currency_pair: { type: 'string', description: 'Currency pair (default: XAU/USD)' },
-          timeframe: { type: 'string', enum: ['1m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h', '1d'], description: 'Chart timeframe' },
+          timeframe: { type: 'string', enum: ['1m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h', '1d'], description: 'Trading timeframe' },
           trade_style: { type: 'string', enum: ['swing', 'day trade', 'scalp'], description: 'Trading style' },
           strategy: { type: 'string', description: 'Trading strategy/technique description' },
           notes: { type: 'string', description: 'Additional notes about the trade' }
@@ -67,13 +67,18 @@ const TOOLS_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'get_trade_insights',
-      description: 'Get comprehensive analytics and insights from all saved trades including win rate, best strategies, timeframes, etc.',
+      description: 'Get comprehensive analytics and insights from all saved trades including win rate, best strategies, timeframes, etc. For date filtering, use date_filter parameter with values: "today", "this_week", or "this_month". DO NOT use start_date or end_date - they are not supported.',
       parameters: {
         type: 'object',
         properties: {
-          currency_pair: { type: 'string', description: 'Filter by currency pair (optional)' },
-          timeframe: { type: 'string', description: 'Filter by timeframe (optional)' },
-          strategy: { type: 'string', description: 'Filter by strategy (optional)' }
+          currency_pair: { type: 'string', description: 'Filter by currency pair (optional, e.g., "XAU/USD")' },
+          timeframe: { type: 'string', description: 'Filter by timeframe (optional, e.g., "1h", "4h")' },
+          strategy: { type: 'string', description: 'Filter by strategy (optional, e.g., "SMC", "trendline")' },
+          date_filter: { 
+            type: 'string', 
+            enum: ['today', 'this_week', 'this_month'],
+            description: 'Filter by date period. Use "today" for today\'s trades, "this_week" for last 7 days, "this_month" for current month. DO NOT use start_date or end_date.'
+          }
         }
       }
     }
@@ -113,6 +118,13 @@ export async function processUserMessage(userMessage, conversationHistory = [], 
 
 CRITICAL RULE: NEVER use the word "(optional)" when asking for trade details. All fields should be presented equally without labels.
 
+MEMORY & CONTEXT:
+- You have access to the FULL conversation history - ALL previous messages are available to you
+- Every trade saved includes a timestamp (date and time)
+- You can answer questions about past trades, dates, and time periods
+- When user asks "how many trades yesterday?", "what trades did I take today?", "last week's performance", etc., you should call get_trade_insights tool
+- Remember ALL previous conversations - if user saved trades 2 days ago, you should remember them
+
 CONVERSATION FLOW:
 
 1. GREETING: When user says "hi", "hello", or starts chatting, introduce yourself:
@@ -149,8 +161,10 @@ CONVERSATION FLOW:
 
 4. GETTING INSIGHTS:
    - When user asks "insights", "show me insights", "how am I doing", "my performance", "statistics", "analytics"
+   - When user asks about specific time periods: "how many trades yesterday?", "today's trades", "last week", "this month", "how many wins today?", etc.
    - Call get_trade_insights tool
    - Display the results in a natural, conversational way with explanations
+   - If user asks about a specific date/time period, mention it in your response (e.g., "Based on your trades today...", "Looking at yesterday's trades...")
 
 5. RISK ALERTS & SUGGESTIONS:
    - When user asks "suggestions", "future plan", "what should I do", "advice", "recommendations", "alerts"
@@ -165,7 +179,9 @@ IMPORTANT RULES:
 - Ask for one thing at a time when collecting trade details
 - After saving a trade, ALWAYS ask about the outcome (WIN/LOSS)
 - Display tool results in natural language, not raw data
-- Remember context - if user just saved trade #5, and says "it was a loss", they mean trade #5`
+- Remember context - if user just saved trade #5, and says "it was a loss", they mean trade #5
+- Remember ALL previous conversations - you have full chat history available
+- When user asks about dates/times, use get_trade_insights to get the relevant data`
     },
     ...conversationHistory,
     {
@@ -246,6 +262,7 @@ IMPORTANT RULES:
 
     // Check if LLM wants to call a tool
     if (message.tool_calls && message.tool_calls.length > 0) {
+      // Execute tool calls
       const toolCall = message.tool_calls[0];
       const toolName = toolCall.function.name;
       
@@ -312,6 +329,21 @@ IMPORTANT RULES:
             // Ensure trade_type is uppercase
             if (toolArgs.trade_type) {
               toolArgs.trade_type = toolArgs.trade_type.toUpperCase();
+            }
+            
+            // Normalize trade_style to lowercase (enum expects: "swing", "day trade", "scalp")
+            if (toolArgs.trade_style) {
+              const style = String(toolArgs.trade_style).toLowerCase().trim();
+              if (style === 'scalp' || style.includes('scalp')) {
+                toolArgs.trade_style = 'scalp';
+              } else if (style.includes('day') || style === 'day trade' || style === 'daytrade') {
+                toolArgs.trade_style = 'day trade';
+              } else if (style === 'swing' || style.includes('swing')) {
+                toolArgs.trade_style = 'swing';
+              } else {
+                // Default to scalp if unclear
+                toolArgs.trade_style = 'scalp';
+              }
             }
 
             // Automatically inject user_id - LLM doesn't need to provide it
@@ -425,7 +457,16 @@ IMPORTANT RULES:
               dateFilter = 'this_month';
             }
             
-            toolResult = await getTradeInsights({...toolArgs, date_filter: dateFilter}, userId);
+            // Clean toolArgs - remove any invalid parameters that LLM might have added
+            const cleanArgs = { ...toolArgs };
+            delete cleanArgs.start_date;  // Not supported by server
+            delete cleanArgs.end_date;    // Not supported by server
+            if (dateFilter) {
+              cleanArgs.date_filter = dateFilter;
+            }
+            
+            console.log('📊 Calling getTradeInsights with cleaned args:', cleanArgs);
+            toolResult = await getTradeInsights(cleanArgs, userId);
             if (toolResult.error) {
               return `❌ Error: ${toolResult.error}`;
             }

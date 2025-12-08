@@ -36,7 +36,7 @@ function Chatbot({ userId }) {
   const [messages, setMessages] = useState(hasHistory ? initialMessages : [
     {
       role: 'assistant',
-      content: 'Hello! I\'m your Forex Trading Assistant. I help you track your trades, analyze performance, and manage risk. How can I assist you today?'
+      content: 'Hello! I\'m your Forex Trading Assistant. I help you track your trades, analyze performance, and manage risk.\n\nI can:\n• Save and log your trades\n• Provide insights and analytics\n• Check for risk alerts\n\nHow can I assist you today?'
     }
   ])
   const [input, setInput] = useState('')
@@ -72,8 +72,9 @@ function Chatbot({ userId }) {
     setLoading(true)
 
     try {
-      // Build conversation history (last 10 messages for context)
-      const conversationHistory = messages.slice(-10).map(msg => ({
+      // Build conversation history - use ALL messages for full context
+      // This ensures the LLM remembers all previous conversations
+      const conversationHistory = messages.map(msg => ({
         role: msg.role,
         content: msg.content
       }))
