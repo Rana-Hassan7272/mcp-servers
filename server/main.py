@@ -137,12 +137,22 @@ async def verify_user_login(
     
     await ensure_database()
     async with get_db_connection() as conn:
-        # Find user by username
+        # Find user by username (case-insensitive)
+        # Try case-insensitive match first
         async with conn.execute(
-            "SELECT user_id, username, password_hash FROM users WHERE username = ?",
+            "SELECT user_id, username, password_hash FROM users WHERE LOWER(username) = LOWER(?)",
             (username,)
         ) as cursor:
             user = await cursor.fetchone()
+            
+            if not user:
+                # Also try by user_id (in case username was stored differently)
+                user_id_from_username = username.lower().replace(' ', '_')
+                async with conn.execute(
+                    "SELECT user_id, username, password_hash FROM users WHERE user_id = ?",
+                    (user_id_from_username,)
+                ) as cursor2:
+                    user = await cursor2.fetchone()
             
             if not user:
                 return {
