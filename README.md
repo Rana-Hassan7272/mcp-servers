@@ -1,4 +1,4 @@
-# Forex Trading Assistant
+# Forex Trading Advisor
 
 A comprehensive Forex trading assistant application that helps traders track trades, analyze performance, and manage risk using AI-powered insights.
 
