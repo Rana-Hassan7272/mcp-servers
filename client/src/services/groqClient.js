@@ -131,25 +131,25 @@ CONVERSATION FLOW:
    "Hello! I'm your Forex Trading Assistant. I help you track your trades, analyze performance, and manage risk. How can I assist you today?"
 
 2. SAVING A NEW TRADE:
-   - When user says "i take new trade", "save trade", "new trade", or similar → Guide them through saving a trade
-   - Ask for details systematically (NEVER mention "optional" for any field):
-     "Great! Let's save your new trade. I'll need a few details:
-     • Entry price?
-     • Lot size?
-     • Current balance?
-     • Trade type (BUY or SELL)?
-     • Take profit?
-     • Stop loss?
-     • Timeframe?
-     • Trade style (swing, day trade, or scalp)?
-     • Strategy?"
+   - When user says "i take new trade", "save trade", "new trade", "i took a trade", or provides trade details → Extract ALL details carefully
+   - CRITICAL: When user provides trade details in their message, you MUST extract EXACT values from their message:
+     * If user says "entry 2650" → extract entry_price: 2650 (NOT 2200 or any other number)
+     * If user says "lot 0.02" → extract lot_size: 0.02 (NOT 0.01 or any other value)
+     * If user says "balance 1010" → extract balance: 1010 (NOT 990 or any other value)
+     * If user says "take profit 2660" → extract take_profit: 2660 (NOT any other value)
+     * If user says "stop loss 2645" → extract stop_loss: 2645 (NOT any other value)
+     * If user says "timeframe 15m" → extract timeframe: "15m" (NOT any other timeframe)
+     * If user says "day trade" → extract trade_style: "day trade" (NOT "scalp" or "swing")
+     * If user says "strategy is trendline" → extract strategy: "trendline" (NOT any other strategy)
    - REQUIRED fields: entry_price, lot_size, balance, trade_type
    - IMPORTANT fields (should be provided): take_profit, stop_loss
    - ALSO NEEDED fields: timeframe, trade_style, strategy
+   - If user provides ALL details in one message (e.g., "entry 2650, lot 0.02, balance 1010, BUY, take profit 2660, stop loss 2645, timeframe 15m, day trade, strategy trendline"), extract ALL values and call save_trade immediately
    - If user provides some details but misses REQUIRED ones, ask for ONLY the missing required fields one by one
    - If user provides all REQUIRED fields but misses IMPORTANT ones (take_profit, stop_loss), ask: "I need your take profit and stop loss prices to complete the trade setup."
    - If user provides all REQUIRED and IMPORTANT fields but misses ALSO NEEDED ones (trade_style, strategy, timeframe), ask: "I have all the essential details. Please provide your trade style (swing, day trade, or scalp), strategy, and timeframe to complete the trade information."
    - CRITICAL: DO NOT call save_trade tool if trade_style, strategy, or timeframe are missing. Ask for them first.
+   - CRITICAL: When extracting values, use EXACT numbers from user's message. Do NOT use approximate values or values from previous trades.
    - Only call save_trade tool when you have collected ALL details including trade_style, strategy, and timeframe
    - After saving successfully, ALWAYS ask: "Trade saved! Was this trade a WIN or LOSS?"
 
@@ -181,7 +181,10 @@ IMPORTANT RULES:
 - Display tool results in natural language, not raw data
 - Remember context - if user just saved trade #5, and says "it was a loss", they mean trade #5
 - Remember ALL previous conversations - you have full chat history available
-- When user asks about dates/times, use get_trade_insights to get the relevant data`
+- When user asks about dates/times, use get_trade_insights to get the relevant data
+- CRITICAL: If user already provided information (e.g., "trade style swing trade"), do NOT ask for it again. Use the information they provided.
+- CRITICAL: Check the conversation history before asking for details - if user already said "timeframe 1h" in a previous message, use that value, don't ask again.
+- CRITICAL: When user provides information in a follow-up message (e.g., "trade style swing trade"), combine it with previously mentioned details and save the trade immediately if all required fields are now present.`
     },
     ...conversationHistory,
     {
@@ -190,11 +193,10 @@ IMPORTANT RULES:
     }
   ];
 
-  try {
-    // Call Groq with function calling enabled
-    let response;
+  // Helper function to make Groq API call with automatic retry on rate limit
+  const makeGroqCall = async (retryCount = 0) => {
     try {
-      response = await groq.chat.completions.create({
+      return await groq.chat.completions.create({
         model: 'llama-3.1-8b-instant', // Currently supported model with function calling
         messages: messages,
         tools: TOOLS_DEFINITIONS,
@@ -207,11 +209,39 @@ IMPORTANT RULES:
       const errorCode = groqError?.error?.code || groqError?.code;
       const errorMessage = groqError?.error?.message || groqError?.message || '';
       
-      // Handle rate limiting
+      // Handle rate limiting with automatic retry
       if (errorCode === 'rate_limit_exceeded' || errorMessage.includes('Rate limit') || errorMessage.includes('rate_limit')) {
-        const waitTime = errorMessage.match(/try again in ([\d.]+)s/)?.[1] || '10';
-        return `⏳ Rate limit reached. Please wait ${waitTime} seconds and try again.\n\n💡 You can also:\n- Use the "Save Trade" form instead of chat\n- Upgrade your Groq plan for higher limits\n- Try again in a few moments`;
+        // Extract wait time from error message (e.g., "try again in 10.5s" or "11.42s")
+        const waitTimeMatch = errorMessage.match(/try again in ([\d.]+)s/i) || errorMessage.match(/([\d.]+)s/i);
+        const waitTimeSeconds = waitTimeMatch ? parseFloat(waitTimeMatch[1]) : 10;
+        
+        // Wait silently in the background (user sees loading indicator)
+        await new Promise(resolve => setTimeout(resolve, (waitTimeSeconds + 1) * 1000)); // +1 second buffer
+        
+        // Retry the request automatically (max 3 retries to prevent infinite loops)
+        if (retryCount < 3) {
+          console.log(`Rate limit hit, waiting ${waitTimeSeconds}s and retrying... (attempt ${retryCount + 1})`);
+          return makeGroqCall(retryCount + 1);
+        } else {
+          // If still failing after retries, return error message
+          return Promise.reject(new Error(`Rate limit exceeded. Please try again later or upgrade your Groq plan.`));
+        }
       }
+      
+      // Re-throw other errors to be handled below
+      throw groqError;
+    }
+  };
+
+  try {
+    // Call Groq with function calling enabled (with automatic retry on rate limit)
+    let response;
+    try {
+      response = await makeGroqCall();
+    } catch (groqError) {
+      // Handle other Groq API errors (non-rate-limit)
+      const errorCode = groqError?.error?.code || groqError?.code;
+      const errorMessage = groqError?.error?.message || groqError?.message || '';
       
       // Handle function calling errors
       if (errorCode === 'tool_use_failed' || errorMessage.includes('Failed to call a function')) {
